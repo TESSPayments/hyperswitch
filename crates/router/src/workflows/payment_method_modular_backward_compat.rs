@@ -820,8 +820,9 @@ pub async fn run_payment_method_modular_backward_compat_backfill(
         logger::info!(
             process_id=%process_id,
             payment_method_id=%workflow.tracking_data().payment_method_id,
-            "Skipping modular backward compatibility backfill because legacy PM is not forward compatible"
+            "Skipping modular backward compatibility backfill because payment method version is V1"
         );
+    } else {
     } else {
         workflow
             .prepare_db_compat()
