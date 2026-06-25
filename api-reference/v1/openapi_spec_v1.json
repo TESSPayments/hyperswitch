@@ -34088,6 +34088,10 @@
             "description": "If enabled, provides whole connector response",
             "nullable": true
           },
+          "is_payment_id_from_merchant": {
+            "type": "boolean",
+            "description": "Indicates whether the `payment_id` was provided by the merchant\nThis value is inferred internally based on the request"
+          },
           "payment_channel": {
             "allOf": [
               {
