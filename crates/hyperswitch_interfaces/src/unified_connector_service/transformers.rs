@@ -242,6 +242,8 @@ pub struct ConnectorErrorInner {
     pub reason: Option<String>,
     /// Name of the connector that returned the error
     pub connector: String,
+    /// Connector's transaction id / debug reference carried in the error body (when present)
+    pub connector_transaction_id: Option<String>,
     /// Network decline code from card scheme (e.g. Visa/Mastercard decline code)
     pub network_decline_code: Option<String>,
     /// Network advice code for retry logic
@@ -980,34 +982,38 @@ impl UnifiedConnectorServiceError {
 
         let status_code = u16::try_from(connector_error.http_status_code?).ok()?;
 
+        let connector_details = connector_error
+            .error_info
+            .as_ref()
+            .and_then(|ei| ei.connector_details.as_ref());
+        let network_details = connector_error
+            .error_info
+            .as_ref()
+            .and_then(|ei| ei.issuer_details.as_ref())
+            .and_then(|id| id.network_details.as_ref());
+
+        // Prefer the connector's own error code from the structured details; the top-level
+        // `error_code` is the generic `CONNECTOR_ERROR_RESPONSE` sentinel and is only the fallback.
+        let code = connector_details
+            .and_then(|cd| cd.code.clone())
+            .unwrap_or_else(|| connector_error.error_code.clone());
+        let reason = connector_details.and_then(|cd| cd.reason.clone());
+        let connector_transaction_id =
+            connector_details.and_then(|cd| cd.connector_transaction_id.clone());
+        let network_decline_code = network_details.and_then(|nd| nd.decline_code.clone());
+        let network_advice_code = network_details.and_then(|nd| nd.advice_code.clone());
+        let network_error_message = network_details.and_then(|nd| nd.error_message.clone());
+
         Some(Self::ConnectorError(Box::new(ConnectorErrorInner {
-            code: connector_error.error_code,
+            code,
             message: connector_error.error_message,
             status_code,
-            reason: connector_error
-                .error_info
-                .as_ref()
-                .and_then(|ei| ei.connector_details.as_ref())
-                .and_then(|cd| cd.reason.clone()),
+            reason,
             connector: connector_name.to_string(),
-            network_decline_code: connector_error
-                .error_info
-                .as_ref()
-                .and_then(|ei| ei.issuer_details.as_ref())
-                .and_then(|id| id.network_details.as_ref())
-                .and_then(|nd| nd.decline_code.clone()),
-            network_advice_code: connector_error
-                .error_info
-                .as_ref()
-                .and_then(|ei| ei.issuer_details.as_ref())
-                .and_then(|id| id.network_details.as_ref())
-                .and_then(|nd| nd.advice_code.clone()),
-            network_error_message: connector_error
-                .error_info
-                .as_ref()
-                .and_then(|ei| ei.issuer_details.as_ref())
-                .and_then(|id| id.network_details.as_ref())
-                .and_then(|nd| nd.error_message.clone()),
+            connector_transaction_id,
+            network_decline_code,
+            network_advice_code,
+            network_error_message,
         })))
     }
 }
@@ -1129,6 +1135,85 @@ impl ErrorSwitch<ConnectorError> for UnifiedConnectorServiceError {
             | Self::SurchargeCalculateFailure
             | Self::PayoutEnrollDisburseAccountFailure
             | Self::NotifyConnectorFailure => ConnectorError::ResponseHandlingFailed,
+        }
+    }
+}
+
+#[cfg(test)]
+mod connector_error_decode_tests {
+    use prost::Message;
+
+    use super::{payments_grpc, UnifiedConnectorServiceError};
+
+    // Builds the gRPC `tonic::Status` exactly as prism encodes a connector HTTP error:
+    // top-level `error_code` is the generic `CONNECTOR_ERROR_RESPONSE` sentinel, while the
+    // connector's real error code / transaction id live in `error_info.connector_details`.
+    fn status_with_details(proto_err: payments_grpc::ConnectorError) -> tonic::Status {
+        let mut buf = Vec::new();
+        proto_err.encode(&mut buf).expect("encode ConnectorError");
+        tonic::Status::with_details(tonic::Code::Unknown, "connector error", buf.into())
+    }
+
+    // Reproduces the paypal refund HTTP 422 from issue #17369 and asserts the decode now
+    // surfaces the connector's own error code and transaction id (debug_id) rather than the
+    // generic sentinel / `None`, matching what the Direct (live) leg produces.
+    #[test]
+    fn recovers_connector_code_and_transaction_id_for_refund_error() {
+        let proto_err = payments_grpc::ConnectorError {
+            error_message: "The requested action could not be performed.".to_string(),
+            error_code: super::CONNECTOR_ERROR_RESPONSE_CODE.to_string(),
+            http_status_code: Some(422),
+            error_info: Some(payments_grpc::ErrorInfo {
+                unified_details: None,
+                issuer_details: None,
+                connector_details: Some(payments_grpc::ConnectorErrorDetails {
+                    code: Some("PAYEE_ACCOUNT_RESTRICTED".to_string()),
+                    message: Some("Payee account is restricted.".to_string()),
+                    reason: Some("description - Payee account is restricted. ;".to_string()),
+                    connector_transaction_id: Some("04806af538d0c".to_string()),
+                    status: None,
+                }),
+            }),
+        };
+
+        match UnifiedConnectorServiceError::from_grpc_error(&status_with_details(proto_err), "paypal")
+        {
+            UnifiedConnectorServiceError::ConnectorError(inner) => {
+                // Pre-fix these were "CONNECTOR_ERROR_RESPONSE" and None respectively.
+                assert_eq!(inner.code, "PAYEE_ACCOUNT_RESTRICTED");
+                assert_eq!(
+                    inner.connector_transaction_id.as_deref(),
+                    Some("04806af538d0c")
+                );
+                assert_eq!(inner.status_code, 422);
+                assert_eq!(
+                    inner.reason.as_deref(),
+                    Some("description - Payee account is restricted. ;")
+                );
+            }
+            other => panic!("expected ConnectorError, got {other:?}"),
+        }
+    }
+
+    // When the connector does not populate structured `connector_details`, fall back to the
+    // generic sentinel code (preserving prior behavior) and leave transaction id unset.
+    #[test]
+    fn falls_back_to_sentinel_without_connector_details() {
+        let proto_err = payments_grpc::ConnectorError {
+            error_message: "boom".to_string(),
+            error_code: super::CONNECTOR_ERROR_RESPONSE_CODE.to_string(),
+            http_status_code: Some(500),
+            error_info: None,
+        };
+
+        match UnifiedConnectorServiceError::from_grpc_error(&status_with_details(proto_err), "paypal")
+        {
+            UnifiedConnectorServiceError::ConnectorError(inner) => {
+                assert_eq!(inner.code, super::CONNECTOR_ERROR_RESPONSE_CODE);
+                assert_eq!(inner.connector_transaction_id, None);
+                assert_eq!(inner.status_code, 500);
+            }
+            other => panic!("expected ConnectorError, got {other:?}"),
         }
     }
 }

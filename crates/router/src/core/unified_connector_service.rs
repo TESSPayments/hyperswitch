@@ -3095,9 +3095,11 @@ pub async fn call_unified_connector_service_for_refund_execute(
                         report.current_context()
                     {
                         let (code, message, status_code, reason, connector,
+                             connector_transaction_id,
                              network_decline_code, network_advice_code, network_error_message) = (
                             &inner.code, &inner.message, inner.status_code, &inner.reason,
-                            &inner.connector, &inner.network_decline_code,
+                            &inner.connector, &inner.connector_transaction_id,
+                            &inner.network_decline_code,
                             &inner.network_advice_code, &inner.network_error_message,
                         );
                         logger::info!(
@@ -3113,13 +3115,14 @@ pub async fn call_unified_connector_service_for_refund_execute(
                             reason: reason.clone(),
                             status_code,
                             attempt_status: None,
-                            connector_transaction_id: None,
+                            connector_transaction_id: connector_transaction_id.clone(),
                             connector_response_reference_id: None,
                             network_decline_code: network_decline_code.clone(),
                             network_advice_code: network_advice_code.clone(),
                             network_error_message: network_error_message.clone(),
                             connector_metadata: None,
                         });
+                        router_data.connector_http_status_code = Some(status_code);
                         return Ok((router_data, (), payments_grpc::RefundResponse::default()));
                     }
                     let api_error = report.current_context().switch();
@@ -3230,9 +3233,11 @@ pub async fn call_unified_connector_service_for_refund_sync(
                         report.current_context()
                     {
                         let (code, message, status_code, reason, connector,
+                             connector_transaction_id,
                              network_decline_code, network_advice_code, network_error_message) = (
                             &inner.code, &inner.message, inner.status_code, &inner.reason,
-                            &inner.connector, &inner.network_decline_code,
+                            &inner.connector, &inner.connector_transaction_id,
+                            &inner.network_decline_code,
                             &inner.network_advice_code, &inner.network_error_message,
                         );
                         logger::info!(
@@ -3248,13 +3253,14 @@ pub async fn call_unified_connector_service_for_refund_sync(
                             reason: reason.clone(),
                             status_code,
                             attempt_status: None,
-                            connector_transaction_id: None,
+                            connector_transaction_id: connector_transaction_id.clone(),
                             connector_response_reference_id: None,
                             network_decline_code: network_decline_code.clone(),
                             network_advice_code: network_advice_code.clone(),
                             network_error_message: network_error_message.clone(),
                             connector_metadata: None,
                         });
+                        router_data.connector_http_status_code = Some(status_code);
                         return Ok((router_data, (), payments_grpc::RefundResponse::default()));
                     }
                     let api_error = report.current_context().switch();
