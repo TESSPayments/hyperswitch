@@ -1176,8 +1176,10 @@ mod connector_error_decode_tests {
             }),
         };
 
-        match UnifiedConnectorServiceError::from_grpc_error(&status_with_details(proto_err), "paypal")
-        {
+        match UnifiedConnectorServiceError::from_grpc_error(
+            &status_with_details(proto_err),
+            "paypal",
+        ) {
             UnifiedConnectorServiceError::ConnectorError(inner) => {
                 // Pre-fix these were "CONNECTOR_ERROR_RESPONSE" and None respectively.
                 assert_eq!(inner.code, "PAYEE_ACCOUNT_RESTRICTED");
@@ -1206,8 +1208,10 @@ mod connector_error_decode_tests {
             error_info: None,
         };
 
-        match UnifiedConnectorServiceError::from_grpc_error(&status_with_details(proto_err), "paypal")
-        {
+        match UnifiedConnectorServiceError::from_grpc_error(
+            &status_with_details(proto_err),
+            "paypal",
+        ) {
             UnifiedConnectorServiceError::ConnectorError(inner) => {
                 assert_eq!(inner.code, super::CONNECTOR_ERROR_RESPONSE_CODE);
                 assert_eq!(inner.connector_transaction_id, None);
